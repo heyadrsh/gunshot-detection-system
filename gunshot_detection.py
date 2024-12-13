@@ -9,15 +9,55 @@ from tqdm import tqdm
 import threading
 import queue
 import time
+import sys
 
 class GunshotDetector:
     def __init__(self):
         self.sample_rate = 44100
         self.duration = 2  # seconds
-        self.model = self._build_model()
         self.classes = ['AK-12', 'AK-47', 'IMI Desert Eagle', 'M16', 'M249', 'M4', 'MG-42', 'MP5', 'Zastava M92']
+        self.model = self._build_model()
         self.audio_queue = queue.Queue()
         
+    def verify_dataset_structure(self):
+        """Verify that the dataset directory exists and has the correct structure."""
+        if not os.path.exists('dataset'):
+            print("\nError: 'dataset' directory not found!")
+            print("\nPlease ensure you have the following directory structure:")
+            print("dataset/")
+            for weapon in self.classes:
+                print(f"    ├── {weapon}/")
+                print("    │   └── [wav files]")
+            print("\nMake sure to:")
+            print("1. Create a 'dataset' directory")
+            print("2. Create subdirectories for each weapon class")
+            print("3. Place the corresponding WAV files in each weapon directory")
+            return False
+            
+        missing_dirs = []
+        empty_dirs = []
+        
+        for weapon_class in self.classes:
+            class_path = os.path.join('dataset', weapon_class)
+            if not os.path.exists(class_path):
+                missing_dirs.append(weapon_class)
+            elif not os.listdir(class_path):
+                empty_dirs.append(weapon_class)
+                
+        if missing_dirs or empty_dirs:
+            print("\nDataset structure issues found:")
+            if missing_dirs:
+                print("\nMissing directories:")
+                for dir_name in missing_dirs:
+                    print(f"- dataset/{dir_name}/")
+            if empty_dirs:
+                print("\nEmpty directories (no WAV files):")
+                for dir_name in empty_dirs:
+                    print(f"- dataset/{dir_name}/")
+            return False
+            
+        return True
+
     def _build_model(self):
         model = models.Sequential([
             layers.Input(shape=(128, 87, 1)),  # Mel spectrogram shape
@@ -54,18 +94,35 @@ class GunshotDetector:
         return mel_spec_db.reshape(128, 87, 1)  # Reshape for CNN input
 
     def prepare_dataset(self):
+        """Prepare the dataset for training."""
+        if not self.verify_dataset_structure():
+            sys.exit(1)
+            
         X = []
         y = []
         
         for idx, class_name in enumerate(tqdm(self.classes, desc="Loading dataset")):
             class_path = os.path.join('dataset', class_name)
-            for audio_file in os.listdir(class_path):
-                if audio_file.endswith('.wav'):  # Adjust based on your audio format
+            wav_files = [f for f in os.listdir(class_path) if f.lower().endswith('.wav')]
+            
+            if not wav_files:
+                print(f"\nWarning: No WAV files found in {class_path}")
+                continue
+                
+            for audio_file in wav_files:
+                try:
                     file_path = os.path.join(class_path, audio_file)
                     features = self.extract_features(audio_path=file_path)
                     X.append(features)
                     y.append(idx)
+                except Exception as e:
+                    print(f"\nError processing {audio_file}: {str(e)}")
+                    continue
         
+        if not X:
+            print("\nError: No valid audio files were processed!")
+            sys.exit(1)
+            
         X = np.array(X)
         y = np.array(y)
         return train_test_split(X, y, test_size=0.2, random_state=42)
